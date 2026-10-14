@@ -52,3 +52,63 @@ def test_clamp_matches_reference_including_inverted_band():
     assert torch.equal(core.clamp(x, torch.tensor(0.0), torch.tensor(1.0)), x.clamp(0.0, 1.0))
     out = core.clamp(torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), torch.tensor(0.0))
     assert torch.equal(out, torch.tensor([0.0, 0.5]))
+
+
+def test_simulate_uses_the_exact_martingale_drift():
+    sigma, s0 = 0.2, -0.1
+    s = core.simulate(1000, 28, sigma, s0, torch.Generator().manual_seed(0))
+    z = torch.randn(28, 1000, generator=torch.Generator().manual_seed(0))
+    expected = s0 + torch.cumsum(sigma * math.sqrt(core.DT) * z - 0.5 * sigma**2 * core.DT, 0)
+    assert s.shape == (29, 1000)
+    assert torch.all(s[0] == s0)
+    assert torch.allclose(s[1:], expected, atol=1e-6)
+
+
+def test_pnl_on_a_hand_written_path():
+    s = torch.log(torch.tensor([[1.0], [1.1], [0.9], [1.2]]))  # European, K = 1
+    zero = core.pnl(lambda *a: torch.zeros(1), "european", s, 0.01, 0.2)
+    assert zero.item() == pytest.approx(-0.2, abs=1e-6)  # minus the payoff
+    one = core.pnl(lambda *a: torch.ones(1), "european", s, 0.01, 0.2)
+    assert one.item() == pytest.approx(1.2 - 1.0 - 0.01 * 1.0 - 0.2, abs=1e-6)  # cost only on the first trade
+
+
+def test_lookback_payoff_includes_the_past_maximum():
+    s = torch.log(torch.tensor([[1.0], [1.01], [0.99]]) / 1.03)
+    past_max = math.log(1.10 / 1.03)
+    wealth = core.pnl(lambda *a: torch.zeros(1), "lookback", s, 0.0, 0.2, m0=past_max)
+    assert wealth.item() == pytest.approx(-(1.10 - 1.03), abs=1e-6)
+
+
+def test_entropic_price_and_utility_match_reference():
+    wealth = -torch.arange(4.0)
+    assert core.utility(wealth) == pytest.approx(-7.7982, abs=1e-4)
+    assert core.price(wealth) == pytest.approx(2.0539, abs=1e-4)
+
+
+def test_whalley_wilmott_half_width():
+    s, m, tau = t64(0.0, 0.0, 15 / 365)
+    _, _, gamma_k = core.european(s, tau, 0.2)
+    lo, hi = core.ww_band("european", 1e-3, s, m, tau, 0.2)
+    assert ((hi - lo) / 2).item() == pytest.approx((1.5 * 1e-3 * gamma_k.item() ** 2) ** (1 / 3), rel=1e-12)
+    lo0, hi0 = core.ww_band("european", 0.0, s, m, tau, 0.2)
+    assert lo0.item() == hi0.item()
+
+
+def no_hedge(s, m, tau, sigma, prev):
+    return torch.zeros_like(s)
+
+
+@pytest.mark.parametrize(
+    "derivative,policy,expected,tol",
+    [
+        ("european", core.whalley_wilmott("european", 0.0), 0.022101, 3e-5),
+        ("lookback", core.whalley_wilmott("lookback", 0.0), 0.01804, 6e-5),
+        ("european", no_hedge, 0.022673, 2.4e-4),
+        ("lookback", no_hedge, 0.018408, 2.0e-4),
+    ],
+)
+def test_paper_anchors(derivative, policy, expected, tol):
+    # zero-cost delta hedge vs Tables B2/B4 c=0 rows; no-hedge prices measured with 10M paths (28 daily steps)
+    s = core.simulate(200_000, 28, 0.2, -math.log(core.STRIKE[derivative]), torch.Generator().manual_seed(1))
+    with torch.no_grad():
+        assert core.price(core.pnl(policy, derivative, s, 0.0, 0.2)) == pytest.approx(expected, abs=tol)
