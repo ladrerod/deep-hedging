@@ -203,3 +203,27 @@ def test_price_sheds_load_with_503_when_its_queue_is_full(client):
         for _ in range(PRICE_SLOTS):
             slots.release()
     assert client.post("/v1/price", json=EURO).status_code == 200
+
+
+def test_cli_train_then_report(tmp_path, capsys):
+    from deep_hedging.cli import main
+
+    main(
+        [
+            "train",
+            "--derivative",
+            "european",
+            "--cost",
+            "0.001",
+            "--method",
+            "ww",
+            "--paths",
+            "1000",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+    assert "price 0.0" in capsys.readouterr().out
+    assert len(list((tmp_path / "custom" / "runs").glob("european-ww-*.pt"))) == 1
+    main(["report", str(tmp_path / "custom")])
+    assert "| 0.001000 |" in (tmp_path / "custom" / "report" / "tables.md").read_text()
