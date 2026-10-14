@@ -122,17 +122,27 @@ def test_network_sizes_match_the_paper(derivative, method, n_params):
     assert sum(p.numel() for p in core.Hedger(derivative, method).parameters()) == n_params
 
 
-def test_ntb_clamps_into_its_band_and_ignores_the_previous_hedge():
+def test_ntb_band_is_centred_on_delta_and_holds_a_hedge_inside_it():
     torch.manual_seed(0)
     net = core.Hedger("lookback", "ntb")
     s = torch.linspace(-0.1, 0.05, 50)
-    m, tau = s.clamp(min=-0.03), torch.tensor(10 / 365)
+    m = s.clamp(min=-0.03)
+    tau = torch.tensor(10 / 365)
     lo, hi = net.band(s, m, tau, 0.2)
-    for prev in (torch.full_like(s, -5.0), torch.full_like(s, 5.0), (lo + hi) / 2):
-        out = net(s, m, tau, 0.2, prev)
-        assert torch.all(out >= torch.minimum(lo, hi) - 1e-6) and torch.all(out <= torch.maximum(lo, hi) + 1e-6)
-    inside = (lo + hi) / 2
-    assert torch.equal(net(s, m, tau, 0.2, inside), torch.where(lo < hi, inside, (lo + hi) / 2))
+    # 1. Band is never inverted with this seed
+    assert torch.all(lo < hi)
+    # 2. No trade inside the band (hedge stays at entry point)
+    q = lo + 0.25 * (hi - lo)
+    assert torch.equal(net(s, m, tau, 0.2, q), q)
+    # 3. Clamping: hedge below band -> lo, hedge above band -> hi
+    assert torch.equal(net(s, m, tau, 0.2, torch.full_like(s, -5.0)), lo)
+    assert torch.equal(net(s, m, tau, 0.2, torch.full_like(s, 5.0)), hi)
+    # 4. Centring: zero last layer -> band offsets are zero -> clamp(prev, delta, delta) = delta
+    with torch.no_grad():
+        net.net[-1].weight.zero_()
+        net.net[-1].bias.zero_()
+    delta = core.greeks("lookback", s, m, tau, 0.2)[1]
+    assert torch.allclose(net(s, m, tau, 0.2, torch.full_like(s, 0.3)), delta)
 
 
 def test_ffn_depends_on_the_previous_hedge():
