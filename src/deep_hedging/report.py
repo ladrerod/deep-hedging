@@ -179,6 +179,8 @@ def report(run_dir):
     """Read run_dir/runs/*.pt; write run_dir/report/ (figures, tables.md, results.csv) and run_dir/models/."""
     run_dir = Path(run_dir)
     ckpts = [(f, load(f)) for f in sorted((run_dir / "runs").glob("*.pt"))]
+    if not ckpts:
+        raise SystemExit(f"no runs in {run_dir / 'runs'}")
     out = run_dir / "report"
     out.mkdir(parents=True, exist_ok=True)
     _results_csv(out / "results.csv", ckpts)

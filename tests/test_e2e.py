@@ -8,10 +8,11 @@ from pathlib import Path
 
 import pytest
 import torch
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from deep_hedging import core, train
-from deep_hedging.api import PRICE_SLOTS, create_app, price_state
+from deep_hedging.api import PRICE_SLOTS, Option, create_app, price_state, select
 from deep_hedging.report import report
 
 
@@ -151,6 +152,7 @@ def test_control_variate_agrees_with_the_plain_estimator(smoke):
         ({"unknown": 1}, 422),
         ({"volatility": 0.3}, 404),
         ({"derivative": "lookback", "strike": 103.0, "max_spot": 99.0}, 422),
+        ({"derivative": "lookback", "strike": 103.0, "max_spot": 150.0}, 422),
     ],
 )
 def test_bad_requests_are_rejected(client, change, status):
@@ -275,3 +277,28 @@ def test_manifest_image_tags_match_the_package_version():
     text = "".join(p.read_text() for p in (ROOT / "k8s").glob("*.yaml"))
     tags = re.findall(r"image: ghcr\.io/ladrerod/deep-hedging:(\S+)", text)
     assert len(tags) == 2 and set(tags) == {version}
+
+
+def test_select_matches_costs_on_a_log_scale_within_half_a_grid_step():
+    grid = [0.0, math.exp(-10), math.exp(-8.75), math.exp(-7.5)]
+    models = {("european", 0.2): {"days": 28, "costs": {c: (f"model-{c:.4e}", None) for c in grid}}}
+
+    def pick(cost):
+        return select(models, Option(**{**EURO, "cost": cost}))[1][0]
+
+    assert pick(0.0) == f"model-{0.0:.4e}"
+    assert pick(1e-4) == f"model-{math.exp(-8.75):.4e}"  # nearest on a log scale, not a linear one
+    assert pick(math.exp(-6.9)) == f"model-{math.exp(-7.5):.4e}"  # within tol = half the largest gap = 0.625
+    for cost in (1e-6, math.exp(-6.8)):
+        with pytest.raises(HTTPException) as err:
+            pick(cost)
+        assert err.value.status_code == 422
+    no_zero = {("european", 0.2): {"days": 28, "costs": {math.exp(-7.5): ("x", None)}}}
+    with pytest.raises(HTTPException):
+        select(no_zero, Option(**{**EURO, "cost": 0.0}))
+
+
+def test_report_refuses_a_directory_without_runs(tmp_path):
+    with pytest.raises(SystemExit, match="no runs"):
+        report(tmp_path)
+    assert not (tmp_path / "models").exists()

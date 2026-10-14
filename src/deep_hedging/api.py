@@ -16,6 +16,7 @@ from deep_hedging.core import DT, STRIKE, greeks, pnl, simulate
 from deep_hedging.train import load, policy
 
 PRICE_SEED = 1234  # fixed, so the same request always returns the same price
+PRICE_PATHS = 20_000
 PRICE_SLOTS = 8  # ponytail: at most 8 pricing requests wait or run per process, the rest get 503; scale with replicas
 
 
@@ -107,7 +108,7 @@ def state(days, opt):
         what = "spot and max_spot" if opt.derivative == "lookback" else "spot"
         raise HTTPException(
             422,
-            f"{what} must lie in [{lo:.4f}, {hi:.4f}] for strike {opt.strike} with "
+            f"{what} must lie in [{lo:.6g}, {hi:.6g}] for strike {opt.strike} with "
             f"{opt.days_to_maturity} days left (the range the model was trained on)",
         )
     return s, m
@@ -147,7 +148,7 @@ def info(ckpt):
     }
 
 
-def create_app(models_dir, price_paths=20_000):
+def create_app(models_dir):
     torch.set_num_threads(1)
     models = load_models(models_dir)
     lock = threading.Lock()
@@ -217,11 +218,11 @@ def create_app(models_dir, price_paths=20_000):
                     opt.cost,
                     opt.current_hedge,
                     ckpt["config"]["sigma"],
-                    price_paths,
+                    PRICE_PATHS,
                 )
         finally:
             app.state.price_slots.release()
         scale = opt.strike / STRIKE[opt.derivative]
-        return {"price": p * scale, "std_error": se * scale, "paths": price_paths, "model": info(ckpt)}
+        return {"price": p * scale, "std_error": se * scale, "paths": PRICE_PATHS, "model": info(ckpt)}
 
     return app

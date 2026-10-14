@@ -150,3 +150,14 @@ def test_ffn_depends_on_the_previous_hedge():
     net = core.Hedger("european", "ffn")
     s, tau = torch.zeros(4), torch.tensor(10 / 365)
     assert not torch.equal(net(s, s, tau, 0.2, torch.zeros(4)), net(s, s, tau, 0.2, torch.ones(4)))
+
+
+def test_pnl_charges_cost_on_every_trade_from_the_previous_hedge():
+    s = torch.log(torch.tensor([[1.0], [1.1], [0.9], [1.2]]))  # European, K = 1, payoff 0.2
+    hedges = iter([torch.tensor([1.0]), torch.tensor([0.4]), torch.tensor([0.9])])  # buy, sell, buy
+    wealth = core.pnl(lambda *a: next(hedges), "european", s, 0.01, 0.2)
+    gains = 1.0 * 0.1 + 0.4 * -0.2 + 0.9 * 0.3
+    costs = 0.01 * (1.0 * 1.0 + 1.1 * 0.6 + 0.9 * 0.5)  # c * S_i * |h_i - h_{i-1}|
+    assert wealth.item() == pytest.approx(gains - costs - 0.2, abs=1e-6)
+    held = core.pnl(lambda *a: torch.ones(1), "european", s, 0.01, 0.2, prev0=1.0)
+    assert held.item() == pytest.approx(1.2 - 1.0 - 0.2, abs=1e-6)  # already hedged: no trade, no cost

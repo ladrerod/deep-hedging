@@ -254,7 +254,7 @@ FastAPI + uvicorn, one process, `torch.set_num_threads(1)`. Interactive docs are
 **Handlers.**
 - `/v1/hedge` and `/v1/price` are plain `def` handlers, so they run in FastAPI's threadpool and never block the event loop.
 - Only `/v1/price` takes the pricing lock.
-- `/healthz` is the only `async def`, so probes are answered even while every pricing thread is busy.
+- `/healthz`, the `/` redirect and the validation-error handler are `async def` because they never block, so probes are answered even while every pricing thread is busy.
 
 **Request body** (both POST endpoints). The pydantic model uses `ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)`: unknown fields, booleans and numeric strings are rejected, and a JSON integer is accepted for a float field.
 ```json
@@ -393,7 +393,7 @@ kubectl port-forward service/deep-hedging 8000:80 &   # restart: the old one die
 
 ## 10. CI/CD
 
-One workflow, `.github/workflows/ci.yml`. Action major versions are checked at implementation time.
+One workflow, `.github/workflows/ci.yml`. Action major versions are checked at implementation time. Every `uses:` ref must resolve (`git ls-remote`): actionlint does not check this, and some actions (setup-uv) publish only full-version tags, so those are pinned to a full version (`astral-sh/setup-uv@v10.3.0`).
 
 - **`test`** (pull requests and pushes): `uv sync --locked`; `uv run ruff check .`; `uv run pytest -q`.
 - **`image`** (needs `test`; `permissions: contents: read`):
