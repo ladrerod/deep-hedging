@@ -69,3 +69,14 @@ def test_report_removes_stale_model_picks(smoke):
     stale.write_bytes(b"left over from an earlier report")
     report(smoke)
     assert not stale.exists()
+
+
+def test_report_serves_the_lowest_price_seed_and_shows_the_seed_sd(tmp_path):
+    base = train.run("european", "ntb", 0.0005, seed=0, iters=1, paths=100, eval_batches=2, eval_paths=100)
+    for seed, price in ((0, 0.0230), (1, 0.0220)):
+        ckpt = {**base, "config": {**base["config"], "seed": seed}, "metrics": {**base["metrics"], "price": price}}
+        train.save(ckpt, tmp_path / "runs" / f"{train.run_name(**ckpt['config'])}.pt")
+    report(tmp_path)
+    best = train.run_name(**{**base["config"], "seed": 1}) + ".pt"
+    assert [p.name for p in (tmp_path / "models").glob("*.pt")] == [best]
+    assert "| 0.000500 | 0.022500 ± 0.000707 |" in (tmp_path / "report" / "tables.md").read_text()
