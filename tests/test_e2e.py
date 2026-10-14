@@ -2,6 +2,7 @@ import inspect
 import json
 import math
 import shutil
+from pathlib import Path
 
 import pytest
 import torch
@@ -227,3 +228,41 @@ def test_cli_train_then_report(tmp_path, capsys):
     assert len(list((tmp_path / "custom" / "runs").glob("european-ww-*.pt"))) == 1
     main(["report", str(tmp_path / "custom")])
     assert "| 0.001000 |" in (tmp_path / "custom" / "report" / "tables.md").read_text()
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BUNDLED = sorted((ROOT / "models").glob("*.pt"))
+
+
+def test_bundled_models_load_safely_and_reproduce():
+    assert BUNDLED, "models/ is empty: run a sweep and copy OUT/<preset>/models/*.pt into models/"
+    ckpts = [train.load(p) for p in BUNDLED]  # weights_only=True for every file
+    c = ckpts[0]["config"]
+    again = train.evaluate(
+        train.policy(ckpts[0]),
+        c["derivative"],
+        c["cost"],
+        c["sigma"],
+        c["days"],
+        c["seed"],
+        c["eval_batches"],
+        c["eval_paths"],
+    )
+    assert abs(again["price"] - ckpts[0]["metrics"]["price"]) <= 0.5 * ckpts[0]["metrics"]["price_se"]
+
+
+def test_price_endpoint_maps_request_units_like_training():
+    # spot 100 / strike 103 is the training state (spot 1, strike 1.03) scaled by 100, so the price must be
+    # 100 x the recorded one; simulating in strike units instead (spot 1/1.03, strike 1) would be ~3% off
+    ckpt = next(train.load(p) for p in BUNDLED if p.name.startswith("lookback-ntb-c5.5308e-04"))
+    cfg, rec = ckpt["config"], ckpt["metrics"]
+    body = {
+        "derivative": "lookback",
+        "spot": 100.0,
+        "strike": 103.0,
+        "days_to_maturity": cfg["days"],
+        "volatility": cfg["sigma"],
+        "cost": cfg["cost"],
+    }
+    r = TestClient(create_app(ROOT / "models")).post("/v1/price", json=body).json()
+    assert abs(r["price"] / 100 - rec["price"]) <= 4 * math.hypot(r["std_error"] / 100, rec["price_se"])
