@@ -3,12 +3,14 @@ import math
 import pytest
 
 from deep_hedging import train
+from deep_hedging.report import report
 
 
 @pytest.fixture(scope="module")
 def smoke(tmp_path_factory):
     out = tmp_path_factory.mktemp("out")
     train.sweep("smoke", out, workers=2)
+    report(out / "smoke")
     return out / "smoke"
 
 
@@ -44,3 +46,26 @@ def test_checkpoint_reproduces_its_recorded_price(smoke):
 def test_short_training_lowers_the_loss():
     h = train.run("european", "ntb", 1e-3, seed=0, iters=30, paths=5_000, eval_batches=2, eval_paths=1_000)["history"]
     assert sum(h[-5:]) / 5 < sum(h[:5]) / 5
+
+
+def test_report_writes_tables_figures_and_models(smoke):
+    rep = smoke / "report"
+    for name in (
+        "fig2_european.png",
+        "fig5_lookback.png",
+        "fig3_band.png",
+        "fig4_european_history.png",
+        "fig6_lookback_history.png",
+    ):
+        assert (rep / name).stat().st_size > 10_000, name
+    tables = (rep / "tables.md").read_text()
+    assert "| 0.000553 |" in tables and "paper NTB" in tables
+    assert len((rep / "results.csv").read_text().strip().splitlines()) == 13
+    assert len(list((smoke / "models").glob("*.pt"))) == 4  # NTB per derivative x cost
+
+
+def test_report_removes_stale_model_picks(smoke):
+    stale = smoke / "models" / "stale.pt"
+    stale.write_bytes(b"left over from an earlier report")
+    report(smoke)
+    assert not stale.exists()
