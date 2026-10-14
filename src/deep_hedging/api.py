@@ -16,6 +16,7 @@ from deep_hedging.core import DT, STRIKE, greeks, pnl, simulate
 from deep_hedging.train import load, policy
 
 PRICE_SEED = 1234  # fixed, so the same request always returns the same price
+PRICE_SLOTS = 8  # ponytail: at most 8 pricing requests wait or run per process, the rest get 503; scale with replicas
 
 
 class Option(BaseModel):
@@ -151,6 +152,7 @@ def create_app(models_dir, price_paths=20_000):
     models = load_models(models_dir)
     lock = threading.Lock()
     app = FastAPI(title="deep-hedging", description="No-transaction band network (Imaki et al. 2021)")
+    app.state.price_slots = threading.BoundedSemaphore(PRICE_SLOTS)  # lock waiters must not fill the threadpool
 
     @app.exception_handler(RequestValidationError)
     async def _invalid(request, exc):  # never echo the input: a bare NaN in it would turn the 422 into a 500
@@ -202,18 +204,23 @@ def create_app(models_dir, price_paths=20_000):
     def price(opt: Option):
         group, (ckpt, net) = select(models, opt)
         s, m = state(group["days"], opt)
-        with lock:  # ponytail: one pricing per process bounds memory; scale with replicas
-            p, se = price_state(
-                opt.derivative,
-                net,
-                s,
-                m,
-                opt.days_to_maturity,
-                opt.cost,
-                opt.current_hedge,
-                ckpt["config"]["sigma"],
-                price_paths,
-            )
+        if not app.state.price_slots.acquire(blocking=False):
+            raise HTTPException(503, "pricing is busy; retry shortly", headers={"Retry-After": "1"})
+        try:
+            with lock:  # ponytail: one pricing per process bounds memory; scale with replicas
+                p, se = price_state(
+                    opt.derivative,
+                    net,
+                    s,
+                    m,
+                    opt.days_to_maturity,
+                    opt.cost,
+                    opt.current_hedge,
+                    ckpt["config"]["sigma"],
+                    price_paths,
+                )
+        finally:
+            app.state.price_slots.release()
         scale = opt.strike / STRIKE[opt.derivative]
         return {"price": p * scale, "std_error": se * scale, "paths": price_paths, "model": info(ckpt)}
 

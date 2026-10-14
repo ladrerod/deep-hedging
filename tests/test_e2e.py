@@ -8,7 +8,7 @@ import torch
 from fastapi.testclient import TestClient
 
 from deep_hedging import core, train
-from deep_hedging.api import create_app, price_state
+from deep_hedging.api import PRICE_SLOTS, create_app, price_state
 from deep_hedging.report import report
 
 
@@ -189,3 +189,17 @@ def test_startup_refuses_empty_or_mixed_horizon_model_dirs(smoke, tmp_path):
     train.save(other, tmp_path / "custom.pt")
     with pytest.raises(SystemExit, match="several horizons"):
         create_app(tmp_path)
+
+
+def test_price_sheds_load_with_503_when_its_queue_is_full(client):
+    slots = client.app.state.price_slots
+    for _ in range(PRICE_SLOTS):
+        assert slots.acquire(blocking=False)
+    try:
+        busy = client.post("/v1/price", json=EURO)
+        assert busy.status_code == 503 and busy.headers["retry-after"] == "1"
+        assert client.post("/v1/hedge", json=EURO).status_code == 200  # the fast path stays available
+    finally:
+        for _ in range(PRICE_SLOTS):
+            slots.release()
+    assert client.post("/v1/price", json=EURO).status_code == 200

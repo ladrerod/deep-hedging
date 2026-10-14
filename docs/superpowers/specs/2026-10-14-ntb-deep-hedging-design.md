@@ -282,7 +282,7 @@ FastAPI + uvicorn, one process, `torch.set_num_threads(1)`. Interactive docs are
 - Returned price = `price_model × strike / K_train`; the standard error is scaled the same way.
 - Equivalently, λ = 1 applies per unit of `strike/K_train`, i.e. `λ_abs = K_train/strike`: 1/strike for the European and 1.03/strike for the lookback. The bands are scale-free.
 - With `current_hedge = 0` on a new option this is the paper's indifference price. Otherwise it is the certainty-equivalent cost of the remaining hedged liability from the current position.
-- Requests are serialised by one `threading.Lock` per process, which bounds memory and CPU; scale with replicas.
+- Requests are serialised by one `threading.Lock` per process, which bounds memory and CPU; scale with replicas. Admission is bounded too: at most `PRICE_SLOTS = 8` pricing requests wait or run per process, and the next one gets 503 with `Retry-After: 1`, so a backlog cannot occupy the threadpool that `/v1/hedge` and `/v1/models` share.
 
 **Model selection and domain checks** (errors return JSON `{"detail": "..."}` with the reason):
 - No model for `(derivative, volatility)`, matched within 1e-9 relative: **404**, listing the available volatilities and the `train` command.
