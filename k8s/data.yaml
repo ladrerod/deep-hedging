@@ -1,0 +1,10 @@
+# Results of the training Job live here. Its own file, so re-running or deleting the Job never deletes them.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: deep-hedging-data
+  labels: {app.kubernetes.io/name: deep-hedging}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}

@@ -1,7 +1,9 @@
 import inspect
 import json
 import math
+import re
 import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -266,3 +268,10 @@ def test_price_endpoint_maps_request_units_like_training():
     }
     r = TestClient(create_app(ROOT / "models")).post("/v1/price", json=body).json()
     assert abs(r["price"] / 100 - rec["price"]) <= 4 * math.hypot(r["std_error"] / 100, rec["price_se"])
+
+
+def test_manifest_image_tags_match_the_package_version():
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    text = "".join(p.read_text() for p in (ROOT / "k8s").glob("*.yaml"))
+    tags = re.findall(r"image: ghcr\.io/ladrerod/deep-hedging:(\S+)", text)
+    assert len(tags) == 2 and set(tags) == {version}
