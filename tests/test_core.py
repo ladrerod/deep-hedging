@@ -112,3 +112,31 @@ def test_paper_anchors(derivative, policy, expected, tol):
     s = core.simulate(200_000, 28, 0.2, -math.log(core.STRIKE[derivative]), torch.Generator().manual_seed(1))
     with torch.no_grad():
         assert core.price(core.pnl(policy, derivative, s, 0.0, 0.2)) == pytest.approx(expected, abs=tol)
+
+
+@pytest.mark.parametrize(
+    "derivative,method,n_params",
+    [("european", "ntb", 3362), ("lookback", "ntb", 3394), ("european", "ffn", 3361), ("lookback", "ffn", 3393)],
+)
+def test_network_sizes_match_the_paper(derivative, method, n_params):
+    assert sum(p.numel() for p in core.Hedger(derivative, method).parameters()) == n_params
+
+
+def test_ntb_clamps_into_its_band_and_ignores_the_previous_hedge():
+    torch.manual_seed(0)
+    net = core.Hedger("lookback", "ntb")
+    s = torch.linspace(-0.1, 0.05, 50)
+    m, tau = s.clamp(min=-0.03), torch.tensor(10 / 365)
+    lo, hi = net.band(s, m, tau, 0.2)
+    for prev in (torch.full_like(s, -5.0), torch.full_like(s, 5.0), (lo + hi) / 2):
+        out = net(s, m, tau, 0.2, prev)
+        assert torch.all(out >= torch.minimum(lo, hi) - 1e-6) and torch.all(out <= torch.maximum(lo, hi) + 1e-6)
+    inside = (lo + hi) / 2
+    assert torch.equal(net(s, m, tau, 0.2, inside), torch.where(lo < hi, inside, (lo + hi) / 2))
+
+
+def test_ffn_depends_on_the_previous_hedge():
+    torch.manual_seed(0)
+    net = core.Hedger("european", "ffn")
+    s, tau = torch.zeros(4), torch.tensor(10 / 365)
+    assert not torch.equal(net(s, s, tau, 0.2, torch.zeros(4)), net(s, s, tau, 0.2, torch.ones(4)))

@@ -7,6 +7,7 @@ Greeks return (price/K, delta, gamma*K), so everything is scale-free in log-mone
 import math
 
 import torch
+from torch import nn
 
 DT = 1 / 365
 STRIKE = {"european": 1.0, "lookback": 1.03}
@@ -102,3 +103,37 @@ def ww_band(derivative, cost, s, m, tau, sigma, lam=1.0):
 def whalley_wilmott(derivative, cost):
     """Hedging policy that keeps the hedge inside the Whalley-Wilmott band (a pure delta hedge at zero cost)."""
     return lambda s, m, tau, sigma, prev: clamp(prev, *ww_band(derivative, cost, s, m, tau, sigma))
+
+
+def mlp(n_in, n_out):
+    """4 hidden layers x 32 units, ReLU (paper Section 5)."""
+    layers = []
+    for i in range(4):
+        layers += [nn.Linear(n_in if i == 0 else 32, 32), nn.ReLU()]
+    return nn.Sequential(*layers, nn.Linear(32, n_out))
+
+
+class Hedger(nn.Module):
+    """'ntb': no-transaction band network (paper eq. 12). 'ffn': feed-forward baseline (eq. 9)."""
+
+    def __init__(self, derivative, method):
+        super().__init__()
+        self.derivative, self.method = derivative, method
+        n_in = 3 if derivative == "european" else 4
+        self.net = mlp(n_in, 2) if method == "ntb" else mlp(n_in + 1, 1)
+
+    def features(self, s, m, tau, sigma):
+        cols = [s] if self.derivative == "european" else [s, m]
+        return torch.stack([*cols, tau.expand_as(s), torch.full_like(s, sigma)], -1)
+
+    def band(self, s, m, tau, sigma):
+        delta = greeks(self.derivative, s, m, tau, sigma)[1]
+        o = nn.functional.leaky_relu(self.net(self.features(s, m, tau, sigma)), 0.01)
+        return delta - o[..., 0], delta + o[..., 1]
+
+    def forward(self, s, m, tau, sigma, prev):
+        if self.method == "ntb":
+            return clamp(prev, *self.band(s, m, tau, sigma))
+        delta = greeks(self.derivative, s, m, tau, sigma)[1]
+        x = torch.cat([self.features(s, m, tau, sigma), prev.unsqueeze(-1)], -1)
+        return delta + torch.tanh(self.net(x)[..., 0])
