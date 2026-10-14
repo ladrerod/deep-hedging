@@ -158,7 +158,7 @@ Dependency direction: `core ← train ← (report, api)`. `train` never imports 
   - skips tasks whose file already exists, which makes the sweep resumable;
   - runs the rest in a `spawn` `ProcessPoolExecutor` with one torch thread per worker (in-process when `workers == 1`);
   - if a worker dies (`BrokenProcessPool`), it exits non-zero with: "a worker died (out of memory?); rerun with fewer --workers; finished runs are kept". Under Kubernetes with cgroup v2 an OOM kills the whole container instead, which shows as pod reason `OOMKilled`.
-- `install_sigterm()`: `signal.signal(SIGTERM, lambda *_: os._exit(143))`, used by train, sweep and report. Atomic writes make a kill lose only in-flight runs.
+- SIGTERM: `cli.main` installs `signal.signal(SIGTERM, lambda *_: os._exit(143))` before train, sweep and report, so pod deletion and `docker stop` do not wait out the grace period. Atomic writes make a kill lose only in-flight runs.
 
 **`report.py`** (matplotlib Agg, stdlib csv):
 - `PAPER_PRICES`: Table B2 (European) and B4 (lookback) prices per cost and method as `(mean, sd)` pairs, a literal dict of 264 numbers. B3 is omitted.
@@ -212,7 +212,7 @@ The image sets `DEEP_HEDGING_HOST=0.0.0.0`, so `serve` inside a container listen
 **Directory layout:** `OUT/<preset>/runs/` (all runs), `OUT/<preset>/report/`, `OUT/<preset>/models/`. Each preset has its own directory, so quick and paper results never mix. Custom `train` runs go to `OUT/custom/runs/`.
 
 **Built-in models:**
-- The maintainer runs `deep-hedging sweep --preset paper` once per release, about 7 hours on an M5 Pro. They then run `rm -f models/*.pt && cp out/paper/models/*.pt models/` and `cp out/paper/report/* docs/results/`, and commit.
+- The maintainer runs `deep-hedging sweep --preset paper` once per release, about 7 hours on an M5 Pro. They then run `find models -name '*.pt' -delete && cp out/paper/models/*.pt models/` and `cp out/paper/report/* docs/results/`, and commit. `find` is used because zsh aborts `rm models/*.pt` when nothing matches.
 - The Dockerfile copies `models/` to `/app/models`.
 - During initial implementation the quick preset's models stand in until the paper sweep finishes. `/v1/models` exposes which preset produced each model.
 
@@ -335,7 +335,7 @@ CMD ["serve"]
 - `<pinned>` is the newest `uv` image tag verified at implementation time.
 - The OCI source label is set by `docker/metadata-action` on published images (Section 10), which links the GHCR package to the repo.
 - **CPU-only torch:** `[tool.uv.sources] torch = [{index = "pytorch-cpu", marker = "sys_platform == 'linux'"}]` with `[[tool.uv.index]] name = "pytorch-cpu", url = "https://download.pytorch.org/whl/cpu", explicit = true`. Linux amd64 and arm64 get `+cpu` wheels with no CUDA; macOS gets the PyPI wheel.
-- **Size:** about 1.1 GB on disk, about 300 MB compressed. The image is multi-arch (`linux/amd64`, `linux/arm64`); nothing compiles.
+- **Size:** measured at 1.46 GB on disk (arm64 build of the draft), about 300 MB compressed. The image is multi-arch (`linux/amd64`, `linux/arm64`); nothing compiles.
 - **User:** numeric uid/gid 10001, so `runAsNonRoot` can verify it. The image works with a read-only root filesystem plus a writable `/tmp`.
 - **Linux bind mounts:** they need `-u "$(id -u):$(id -g)"` and an existing host folder; the README states this.
 
@@ -487,7 +487,7 @@ Measured on an idle Apple M5 Pro (18 cores):
 | Preset | Costs | Seeds | Methods | Iterations × paths | Evaluation | Runs | Time (M5 Pro) |
 |---|---|---|---|---|---|---|---|
 | smoke | `0, e^-7.5` | 0 | ntb, ffn, ww | 5 × 1,000 | 2 × 1,000 | 12 | about 1 s |
-| quick (default) | `0, e^-10, e^-8.75, e^-7.5, e^-6.25, e^-5` | 0 | ntb, ffn, ww | 300 × 10,000 | 20 × 10,000 | 36 | about 2 min with 4 workers |
+| quick (default) | `0, e^-10, e^-8.75, e^-7.5, e^-6.25, e^-5` | 0 | ntb, ffn, ww | 300 × 10,000 | 20 × 10,000 | 36 | 77 s with 4 workers (measured) |
 | paper | all 22 | 0–4 | ntb, ffn, ww | 1,000 × 50,000 | 20 × 50,000 | 660 (440 trained) | about 7 h with 4 workers |
 
 - **Quick-preset check** at implementation time: at every positive cost and for both derivatives, the seed-0 NTB price must be ≤ the FFN price + `2·sqrt(price_se_ntb² + price_se_ffn²)`. The design-time prototype already showed this for the European option over 5 seeds at 300 × 10k. If the check fails, raise to 500 × 20,000 and re-check, then record the final values here and in the README.
