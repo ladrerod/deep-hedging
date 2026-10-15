@@ -1,0 +1,27 @@
+# kubectl apply -k k8s: the API from api.yaml, now serving the models the Job trained onto the PVC.
+# Back to the built-in models: kubectl apply -f k8s/api.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: [api.yaml]
+patches:
+  - target: {kind: Deployment, name: deep-hedging}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: deep-hedging}
+      spec:
+        template:
+          metadata:
+            labels: {deep-hedging/volume: data}
+          spec:
+            affinity:
+              podAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector: {matchLabels: {deep-hedging/volume: data}}
+                    topologyKey: kubernetes.io/hostname
+            containers:
+              - name: api
+                env: [{name: DEEP_HEDGING_MODELS, value: /data/quick/models}]  # paper preset: /data/paper/models
+                volumeMounts: [{name: data, mountPath: /data, readOnly: true}]
+            volumes:
+              - {name: data, persistentVolumeClaim: {claimName: deep-hedging-data, readOnly: true}}

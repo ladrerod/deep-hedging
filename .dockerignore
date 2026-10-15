@@ -1,0 +1,9 @@
+.git
+.github
+.venv
+out
+tests
+docs
+k8s
+**/__pycache__
+**/*.pt.tmp
