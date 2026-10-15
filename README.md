@@ -107,9 +107,9 @@ The API has no authentication, rate limiting or request-size cap: keep the Servi
 |---|---|---|---|
 | `smoke` | 2 × 1 | 5 × 1,000 | seconds (tests and CI) |
 | `quick` (default) | 6 × 1 | 300 × 10,000 | about 1–2 minutes |
-| `paper` | 22 × 5 | 1,000 × 50,000 | about 7 hours |
+| `paper` | 22 × 5 | 1,000 × 50,000 | about 7–8 hours |
 
-- Run `uv run deep-hedging sweep --preset paper --workers 4`. It resumes if interrupted.
+- Run `uv run deep-hedging sweep --preset paper --workers 4`. It resumes if interrupted. Keep the machine awake and on mains power: on macOS, prefix the command with `caffeinate -is`.
 - One training iteration at 50,000 paths takes about 0.17 s on one core. More than 4 workers did not help: the work is memory-bandwidth bound.
 
 The figures and tables below come from the paper preset: [`docs/results/tables.md`](docs/results/tables.md) lists our prices next to the paper's Tables B2 and B4.
@@ -119,12 +119,21 @@ The figures and tables below come from the paper preset: [`docs/results/tables.m
 | ![Utility and price spread vs cost, lookback](docs/results/fig5_lookback.png) | ![No-transaction band vs log-moneyness](docs/results/fig3_band.png) |
 | ![Learning history, European](docs/results/fig4_european_history.png) | ![Learning history, lookback](docs/results/fig6_lookback_history.png) |
 
+### Reproduction checks (paper preset)
+
+- 5 seed(s), 21 positive costs.
+- European: band network price <= feed-forward at every positive cost: yes.
+- European: band network within 3 combined sd of Table B2 at costs <= 1e-3: 13/13.
+- European: band network plateaus at the no-hedge price 0.02267 for c >= 1.5e-3: 7/7.
+- Lookback: band network price <= feed-forward at every positive cost: yes.
+- Share of the loss improvement reached by iteration 100 (European, c = e^-7.5, seed 0): band network 88%, feed-forward 19%.
+
 ### Deviations from the paper
 
 - **28 daily steps, not 30.** The paper's tables only match 28: the zero-cost European price is 0.022101 with 28 steps (paper 0.022101) but 0.022880 with 30. The authors' code builds `int((30/365)/(1/365)) = 29` time points.
 - **Exactly driftless paths.** The reference code's path generator has a drift of about -1.1e-4 over the horizon.
 - **Closed-form lookback greeks** instead of automatic differentiation, which on current PyTorch returns a quarter of the gamma whenever the spot equals its running maximum.
-- **Lookback prices are for daily monitoring.** The payoff and `max_spot` use daily closes, so served lookback prices sit below the continuous-monitoring Black–Scholes value (about 18.8% lower for a new 28-day, strike-1.03 option). The continuous delta is still the band centre, as in the paper.
+- **Lookback prices are for daily monitoring.** The payoff and `max_spot` use daily closes, so served lookback prices sit below the continuous-monitoring Black–Scholes value (about 16% lower for a new 28-day, strike-1.03 option; the continuous value is about 19% higher). The continuous delta is still the band centre, as in the paper.
 - **Not reproduced:** the appendix learning-rate study (Figure A1).
 - **Not reproducible from the paper itself:**
   - Table B3 is a copy of Table B1.
@@ -145,7 +154,7 @@ docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/out:/data" ghcr.io/ladrerod/deep
 docker run --rm -p 127.0.0.1:8000:8000 -v "$PWD/out:/data:ro" ghcr.io/ladrerod/deep-hedging:0.1.0 serve --models /data/custom/runs
 ```
 
-From a clone, run `uv sync` once and prefix the commands with `uv run` (for example `uv run deep-hedging train --derivative lookback --cost 0.001`). A models directory may hold one horizon (`--days`) per derivative and volatility.
+From a clone, run `uv sync` once and prefix the commands with `uv run` (for example `uv run deep-hedging train --derivative lookback --cost 0.001`). A models directory may hold one horizon (`--days`) per derivative and volatility. Serve the result locally with `uv run deep-hedging serve --models out/custom/runs`.
 
 ## Development
 
