@@ -99,7 +99,7 @@ The API has no authentication, rate limiting or request-size cap: keep the Servi
 
 **Units.** Risk aversion λ = 1 applies to P&L per unit of `strike / K_train`, where `K_train` is 1 (European) or 1.03 (lookback). Equivalently `λ = K_train / strike`. With this low risk aversion the bands are wide, and above roughly 0.15% cost the European network learns not to hedge at all. That matches the paper, but it surprises people.
 
-**Served models** are the best of 5 seeds, so their recorded prices are optimistic by about one standard error.
+**Served models** are the best of 5 seeds, so their recorded prices are optimistic by about one standard error (up to about 3.5 at a few low European costs).
 
 ## Reproducing the paper
 
